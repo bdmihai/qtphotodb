@@ -26,3 +26,9 @@
 *.exe
 *.out
 *.app
+
+# Any kind of photos (using my own for test)
+*.jpg
+*.jpeg
+*.png
+*.bmp
