@@ -25,9 +25,11 @@
 
 QTextStream cout(stdout, QIODevice::WriteOnly);
 QTextStream cerr(stderr, QIODevice::WriteOnly);
-QTextStream clog;
 
-bool linkByDate(QDir sortDir, QSqlDatabase db);
+bool linkByDate (QDir sortDir);
+bool linkByTag  (QDir sortDir);
+bool linkByAlbum(QDir sortDir);
+bool linkBySize (QDir sortDir);
 
 int main(int argc, char *argv[])
 {
@@ -46,7 +48,7 @@ int main(int argc, char *argv[])
 
   // add the application options
   options.add(&rootPath, "rootPath",             "directory where the db shall be created", true );
-  options.add(&linkBy,   "linkBy",   "-link_by", "lynk by (date, tag, album, camera)",      true );
+  options.add(&linkBy,   "linkBy",   "-link_by", "lynk by (date, tag, size, album)",        true );
   options.add(&noLogo,   "",         "-nologo" , "do not show logo",                        false);
 
   // set the application options values
@@ -62,99 +64,279 @@ int main(int argc, char *argv[])
     cout << options.logo() << endl;
   }
 
-  QDir rootDir = QDir(rootPath);
-
+  cout << "Initial check";
+  // prepare and check the root directory
+  QDir rootDir(rootPath);
   if (!rootDir.exists())
   {
-    cerr << "Directory " << rootPath << " not found!" << endl;
+    cerr << "ERROR: Directory " << rootPath << " not found!" << endl;
     return 1;
   }
-
   if (!rootDir.isReadable())
   {
-    cerr << "Directory " << rootPath << " not readable!" << endl;
+    cerr << "ERROR: Directory " << rootPath << " not readable!" << endl;
     return 1;
   }
+  rootPath.replace('\\', '/');
+  if (rootPath.endsWith('/')) rootPath.remove(rootPath.length() - 1, 1);
+  cout << ".";
 
-  QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
-  db.setDatabaseName(rootPath + "/database.s3db");
-
-  if (!db.open())
-  {
-    cerr << "Database " << rootPath + "/database.s3db" << " canot be opened!" << endl;
-    return 2;
-  }
-
-  QFile logFile("qtphotodb_symlink.log");
-  logFile.open(QIODevice::WriteOnly);
-  clog.setDevice(&logFile);
-
+  // prepare and check the sort directory
   QDir sortDir(rootDir.path() + "/sort");
   if (!sortDir.exists())
   {
     cerr << "Directory " << sortDir.path() << " not found!" << endl;
     return 1;
   }
-
   if (!sortDir.isReadable())
   {
-    cerr << "Directory " << sortDir.path() << " not readable!" << endl;
+    cerr << "ERROR: Directory " << sortDir.path() << " not readable!" << endl;
     return 1;
   }
 
-  if (linkBy == "date")
+  // check for a database in the root path
+  if (!QFileInfo::exists(rootPath + "/database.s3db"))
   {
-    linkByDate(sortDir, db);
+    cerr << "ERROR: Directory " << rootPath << " has no database!" << endl;
+  }
+  cout << ".";
+
+  // create the application database
+  QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
+  db.setDatabaseName(rootPath + "/database.s3db");
+  if (!db.open())
+  {
+    cerr << "Database " << rootPath + "/database.s3db" << " canot be opened!" << endl;
+    return 2;
+  }
+  cout << "done" << endl;
+
+  QStringList linkByList = linkBy.split(',', QString::SkipEmptyParts);
+  for (int i = 0; i < linkByList.count(); i++)
+  {
+    cout << "Linking by " << linkByList[i]; cout.flush();
+    if (linkByList[i] == "date")
+    {
+      linkByDate(sortDir);
+    }
+    else if ( linkByList[i] == "tag" )
+    {
+      linkByTag(sortDir);
+    }
+    else if ( linkByList[i] == "album" )
+    {
+      linkByAlbum(sortDir);
+    }
+    else if ( linkByList[i] == "size" )
+    {
+      linkBySize(sortDir);
+    }
+    cout << "done" << endl;
   }
 
-
-  logFile.close();
   return 0;
 }
 
-bool linkByDate(QDir sortDir, QSqlDatabase db)
+bool linkByDate(QDir sortDir)
 {
   QDir linkRoot(sortDir.path() + "/by_date");
-
-  if (linkRoot.exists(sortDir.path() + "/by_date"))
+  if (!linkRoot.exists(sortDir.path() + "/by_date"))
   {
-    QDir(sortDir.path() + "/by_date").removeRecursively();
+    sortDir.mkdir("by_date");
   }
-  sortDir.mkdir("by_date");
 
-  QSqlQuery q1(db);
-  q1.exec("SELECT Date FROM Photos");
-  while (q1.next())
+  QSqlQuery q(QSqlDatabase::database());
+  if (!q.exec("SELECT Photos.Name,Photos.Date FROM Photos"))
   {
-    QDateTime ts = q1.value(0).toDateTime();
-    QString datePath = QString("/%1/%2/%3")
-                       .arg(ts.date().year())
-                       .arg(ts.date().month(), 2, 10, QChar('0'))
-                       .arg(ts.date().day(), 2, 10, QChar('0'));
+    cerr << "ERROR: " << q.lastError().text() << endl;
+    return false;
+  }
+  int cnt = 0;
+  while (q.next())
+  {
+    QString   name  = q.value(0).toString();
+    QDateTime tstmp = q.value(1).toDateTime();
 
-    QDir dateDir(linkRoot.path() + datePath);
-    if (!dateDir.exists())
-    {
-      dateDir.mkpath(dateDir.path());
-    }
+    // absolute link directory path
+    QString linkDirPath = QString("%1/%2/%3/%4")
+                          .arg(sortDir.path() + "/by_date")
+                          .arg(tstmp.date().year())
+                          .arg(tstmp.date().month(), 2, 10, QChar('0'))
+                          .arg(tstmp.date().day()  , 2, 10, QChar('0'));
 
-    QSqlQuery q2(db);
-    q2.exec(QString("SELECT Name FROM Photos WHERE Name LIKE '%1-%2-%3%'")
-            .arg(ts.date().year())
-            .arg(ts.date().month(), 2, 10, QChar('0'))
-            .arg(ts.date().day(), 2, 10, QChar('0')));
-    while (q2.next())
-    {
-      QString linkName = QString(dateDir.path() + "/%1").arg(q2.value(0).toString());
+    // absolute link file path
+    QString linkFilePath = QString("%1/%2")
+                           .arg(linkDirPath)
+                           .arg(name);
 
-      if (QFileInfo(linkName).exists())
-      {
-        continue;
-      }
+    // relative target file path
+    QString targetFilePath = QString("../../../../../bulk/%1")
+                             .arg(name);
 
-      QString fileName = QString("../../../../../bulk/%1").arg(q2.value(0).toString());
-      QFile::link(fileName, linkName);
-    }
+    // if link file exists continue with next item
+    if (QFileInfo(linkFilePath).exists()) continue;
+
+    // create the directory and make sure it exists
+    QDir linkDir(linkDirPath); linkDir.mkpath(linkDirPath);
+
+    // create the link
+    QFile::link(targetFilePath, linkFilePath);
+    cnt++; cout << "."; cout.flush(); if (cnt % 50 == 0) cout << cnt << endl;
+  }
+
+  return true;
+}
+
+bool linkByTag(QDir sortDir)
+{
+  QDir linkRoot(sortDir.path() + "/by_tag");
+  if (!linkRoot.exists(sortDir.path() + "/by_tag"))
+  {
+    sortDir.mkdir("by_tag");
+  }
+
+  QSqlQuery q(QSqlDatabase::database());
+  if (!q.exec("SELECT Photos.Name,Photos.date,Tags.Name FROM Photos INNER JOIN Tags ON Photos.Id = Tags.PhotoId"))
+  {
+    cerr << "ERROR: " << q.lastError().text() << endl;
+    return false;
+  }
+  int cnt = 0;
+  while (q.next())
+  {
+    QString   name   = q.value(0).toString();
+    QDateTime tstmp  = q.value(1).toDateTime();
+    QString   tag    = q.value(2).toString();
+
+    // absolute link directory path
+    QString linkDirPath = QString("%1/%2/%3-%4")
+                          .arg(sortDir.path() + "/by_tag")
+                          .arg(tag)
+                          .arg(tstmp.date().year())
+                          .arg(tstmp.date().month(), 2, 10, QChar('0'));
+
+    // absolute link file path
+    QString linkFilePath = QString("%1/%2")
+                           .arg(linkDirPath)
+                           .arg(name);
+
+    // relative target file path
+    QString targetFilePath = QString("../../../../bulk/%1")
+                             .arg(name);
+
+    // if link file exists continue with next item
+    if (QFileInfo(linkFilePath).exists()) continue;
+
+    // create the directory and make sure it exists
+    QDir linkDir(linkDirPath); linkDir.mkpath(linkDirPath);
+
+    // create the link
+    QFile::link(targetFilePath, linkFilePath);
+    cnt++; cout << "."; cout.flush(); if (cnt % 50 == 0) cout << cnt << endl;
+  }
+
+  return true;
+}
+
+bool linkByAlbum(QDir sortDir)
+{
+  QDir linkRoot(sortDir.path() + "/by_album");
+  if (!linkRoot.exists(sortDir.path() + "/by_album"))
+  {
+    sortDir.mkdir("by_album");
+  }
+
+  QSqlQuery q(QSqlDatabase::database());
+  if (!q.exec("SELECT Photos.Name,Photos.date,Albums.Name FROM Photos INNER JOIN Albums ON Photos.Id = Albums.PhotoId"))
+  {
+    cerr << "ERROR: " << q.lastError().text() << endl;
+    return false;
+  }
+  int cnt = 0;
+  while (q.next())
+  {
+    QString   name   = q.value(0).toString();
+    QDateTime tstmp  = q.value(1).toDateTime();
+    QString   album  = q.value(2).toString();
+
+    // absolute link directory path
+    QString linkDirPath = QString("%1/%2/%3-%4")
+                          .arg(sortDir.path() + "/by_album")
+                          .arg(album)
+                          .arg(tstmp.date().year())
+                          .arg(tstmp.date().month(), 2, 10, QChar('0'));
+
+    // absolute link file path
+    QString linkFilePath = QString("%1/%2")
+                           .arg(linkDirPath)
+                           .arg(name);
+
+    // relative target file path
+    QString targetFilePath = QString("../../../../bulk/%1")
+                             .arg(name);
+
+    // if link file exists continue with next item
+    if (QFileInfo(linkFilePath).exists()) continue;
+
+    // create the directory and make sure it exists
+    QDir linkDir(linkDirPath); linkDir.mkpath(linkDirPath);
+
+    // create the link
+    QFile::link(targetFilePath, linkFilePath);
+    cnt++; cout << "."; cout.flush(); if (cnt % 50 == 0) cout << cnt << endl;
+  }
+
+  return true;
+}
+
+bool linkBySize(QDir sortDir)
+{
+  QDir linkRoot(sortDir.path() + "/by_size");
+  if (!linkRoot.exists(sortDir.path() + "/by_size"))
+  {
+    sortDir.mkdir("by_size");
+  }
+
+  QSqlQuery q(QSqlDatabase::database());
+  if (!q.exec("SELECT Photos.Name,Photos.Date,Exif.ImageWidth,Exif.ImageHeight FROM Photos INNER JOIN Exif ON Photos.Id = Exif.PhotoId"))
+  {
+    cerr << "ERROR: " << q.lastError().text() << endl;
+    return false;
+  }
+  int cnt = 0;
+  while (q.next())
+  {
+    QString   name   = q.value(0).toString();
+    QDateTime tstmp  = q.value(1).toDateTime();
+    int       width  = q.value(2).toInt();
+    int       height = q.value(3).toInt();
+
+    // absolute link directory path
+    QString linkDirPath = QString("%1/%2x%3/%4-%5")
+                          .arg(sortDir.path() + "/by_size")
+                          .arg(width)
+                          .arg(height)
+                          .arg(tstmp.date().year())
+                          .arg(tstmp.date().month(), 2, 10, QChar('0'));
+
+    // absolute link file path
+    QString linkFilePath = QString("%1/%2")
+                           .arg(linkDirPath)
+                           .arg(name);
+
+    // relative target file path
+    QString targetFilePath = QString("../../../../bulk/%1")
+                             .arg(name);
+
+    // if link file exists continue with next item
+    if (QFileInfo(linkFilePath).exists()) continue;
+
+    // create the directory and make sure it exists
+    QDir linkDir(linkDirPath); linkDir.mkpath(linkDirPath);
+
+    // create the link
+    QFile::link(targetFilePath, linkFilePath);
+    cnt++; cout << "."; cout.flush(); if (cnt % 50 == 0) cout << cnt << endl;
   }
 
   return true;

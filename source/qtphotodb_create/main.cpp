@@ -58,86 +58,100 @@ int main(int argc, char *argv[])
     cout << options.logo() << endl;
   }
 
-  QDir rootDir = QDir(rootPath);
-
+  // prepare and check the root directory
+  QDir rootDir(rootPath);
   if (!rootDir.exists())
   {
-    cerr << "Directory " << rootPath << " not found!" << endl;
+    cerr << "ERROR: Directory " << rootPath << " not found!" << endl;
     return 1;
   }
-
   if (!rootDir.isReadable())
   {
-    cerr << "Directory " << rootPath << " not readable!" << endl;
+    cerr << "ERROR: Directory " << rootPath << " not readable!" << endl;
     return 1;
   }
+  rootPath.replace('\\', '/');
+  if (rootPath.endsWith('/')) rootPath.remove(rootPath.length() - 1, 1);
 
+  // check that the directory is empty
   if (rootDir.entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).count() != 0)
   {
-    cerr << "Directory " << rootPath << " is not empty! Please provide a empty directory." << endl;
+    cerr << "ERROR: Directory " << rootPath << " is not empty! Please provide a empty directory." << endl;
     return 1;
   }
 
   QSqlDatabase db = QSqlDatabase::addDatabase("QSQLITE");
   db.setDatabaseName(rootPath + "/database.s3db");
-
   if (!db.open())
   {
-    cerr << "Database " << rootPath + "/database.s3db" << " canot be opened!" << endl;
+    cerr << "ERROR: Database " << rootPath + "/database.s3db" << " canot be opened!" << endl;
     return 2;
   }
 
-  QFile logFile("qtphotodb_create.log");
+  // create directories
+  cout << "Creating directories";
+  rootDir.mkdir("bulk");   cout << ".";
+  rootDir.mkdir("sort");   cout << ".";
+  rootDir.mkdir("log");    cout << ".";
+  rootDir.mkdir("backup"); cout << ".";
+  rootDir.mkdir("cache");  cout << ".";
+  cout << "done" << endl;
+
+  // create a log file
+  QDateTime logTime = QDateTime::currentDateTime();
+  QFile logFile(rootPath + "/log/" + QString("%1-%2-%3-%4-%5-%6.create.log")
+                                     .arg(logTime.date().year())
+                                     .arg(logTime.date().month(),  2, 10, QChar('0'))
+                                     .arg(logTime.date().day(),    2, 10, QChar('0'))
+                                     .arg(logTime.time().hour(),   2, 10, QChar('0'))
+                                     .arg(logTime.time().minute(), 2, 10, QChar('0'))
+                                     .arg(logTime.time().second(), 2, 10, QChar('0')));
   logFile.open(QIODevice::WriteOnly);
   clog.setDevice(&logFile);
 
+  cout << "Creating database";
   QSqlQuery query;
-  clog << "[database.s3db]" << endl;
+  clog << "Database : " << rootPath + "/database.s3db" << endl;
 
-  query.exec("CREATE TABLE [Albums] (                            " \
-             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL," \
-             "  [Name] VARCHAR(1024)  NOT NULL,                  " \
-             "  [PhotoId] INTEGER  NOT NULL                      " \
-             ");                                                 ");
-  clog << "Albums = " << query.lastQuery().simplified() << endl;
+  query.exec("CREATE TABLE [Albums] (                            \n" \
+             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,\n" \
+             "  [Name] VARCHAR(1024)  NOT NULL,                  \n" \
+             "  [PhotoId] INTEGER  NOT NULL                      \n" \
+             ");                                                 \n");
+  clog << "Albums : " << query.lastQuery().simplified() << endl; cout << ".";
 
-  query.exec("CREATE TABLE [Exif] (                              " \
-             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL," \
-             "  [ImageDescription] VARCHAR(1024)  NULL,          " \
-             "  [Make] VARCHAR(1024)  NULL,                      " \
-             "  [Model] VARCHAR(1024)  NULL,                     " \
-             "  [Software] VARCHAR(1024)  NULL,                  " \
-             "  [DateTime] VARCHAR(1024)  NULL,                  " \
-             "  [ImageWidth] INTEGER  NULL,                      " \
-             "  [ImageHeight] INTEGER  NULL,                     " \
-             "  [Latitude] FLOAT  NULL,                          " \
-             "  [Longitude] FLOAT  NULL,                         " \
-             "  [Altitude] FLOAT  NULL,                          " \
-             "  [PhotoId] INTEGER  NOT NULL                      " \
-             ");                                                 ");
-  clog << "Exif = " << query.lastQuery().simplified() << endl;
+  query.exec("CREATE TABLE [Exif] (                              \n" \
+             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,\n" \
+             "  [ImageDescription] VARCHAR(1024)  NULL,          \n" \
+             "  [Make] VARCHAR(1024)  NULL,                      \n" \
+             "  [Model] VARCHAR(1024)  NULL,                     \n" \
+             "  [Software] VARCHAR(1024)  NULL,                  \n" \
+             "  [DateTime] VARCHAR(1024)  NULL,                  \n" \
+             "  [ImageWidth] INTEGER  NULL,                      \n" \
+             "  [ImageHeight] INTEGER  NULL,                     \n" \
+             "  [Latitude] FLOAT  NULL,                          \n" \
+             "  [Longitude] FLOAT  NULL,                         \n" \
+             "  [Altitude] FLOAT  NULL,                          \n" \
+             "  [PhotoId] INTEGER  NOT NULL                      \n" \
+             ");                                                 \n");
+  clog << "Exif : " << query.lastQuery().simplified() << endl; cout << ".";
 
-  query.exec("CREATE TABLE [Photos] (                            " \
-             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL," \
-             "  [Name] VARCHAR(32)  UNIQUE NOT NULL,             " \
-             "  [Hash] VARCHAR(32)  NOT NULL,                    " \
-             "  [Size] INTEGER  NOT NULL,                        " \
-             "  [Date] TIMESTAMP  NOT NULL                       " \
-             ");                                                 ");
-  clog << "Photos = " << query.lastQuery().simplified() << endl;
+  query.exec("CREATE TABLE [Photos] (                            \n" \
+             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,\n" \
+             "  [Name] VARCHAR(32)  UNIQUE NOT NULL,             \n" \
+             "  [Hash] VARCHAR(32)  NOT NULL,                    \n" \
+             "  [Size] INTEGER  NOT NULL,                        \n" \
+             "  [Date] TIMESTAMP  NOT NULL                       \n" \
+             ");                                                 \n");
+  clog << "Photos : " << query.lastQuery().simplified() << endl; cout << ".";
 
-  query.exec("CREATE TABLE [Tags] (                              " \
-             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL," \
-             "  [Name] VARCHAR(1024)  NOT NULL,                  " \
-             "  [PhotoId] INTEGER  NOT NULL                      " \
-             ");                                                 ");
-  clog << "Tags = " << query.lastQuery().simplified() << endl;
-
-  rootDir.mkdir("bulk");
-  clog << "BulkDirectory = bulk" << endl;
-
-  rootDir.mkdir("sort");
-  clog << "SortDirectory = sort" << endl;
+  query.exec("CREATE TABLE [Tags] (                              \n" \
+             "  [Id] INTEGER  PRIMARY KEY AUTOINCREMENT NOT NULL,\n" \
+             "  [Name] VARCHAR(1024)  NOT NULL,                  \n" \
+             "  [PhotoId] INTEGER  NOT NULL                      \n" \
+             ");                                                 \n");
+  clog << "Tags : " << query.lastQuery().simplified() << endl; cout << ".";
+  cout << "done" << endl;
 
   logFile.close();
   return 0;
